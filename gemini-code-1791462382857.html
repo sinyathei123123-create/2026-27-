@@ -1,0 +1,468 @@
+<!DOCTYPE html>
+<html lang="zh-HK">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>學會週五集會點名系統 (雲端即時同步版)</title>
+    <!-- Tailwind CSS CDN -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
+    <!-- SheetJS (XLSX) CDN -->
+    <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+</head>
+<body class="bg-slate-100 min-h-screen text-slate-800 font-sans">
+
+    <!-- Header -->
+    <header class="bg-indigo-600 text-white shadow-md">
+        <div class="max-w-4xl mx-auto px-4 py-4 flex justify-between items-center">
+            <h1 class="text-xl font-bold flex items-center gap-2">
+                <i class="fa-solid fa-cloud-arrow-up"></i> 學會點名 App 
+                <span class="text-xs bg-emerald-500 text-white px-2 py-0.5 rounded-full font-normal">Google Sheets 雲端同步</span>
+            </h1>
+            <span class="text-xs bg-indigo-500 px-3 py-1 rounded-full text-indigo-100">逢星期五例會</span>
+        </div>
+    </header>
+
+    <main class="max-w-4xl mx-auto px-4 py-6 space-y-6">
+
+        <!-- 雲端同步動態提示欄 -->
+        <div id="syncStatus" class="hidden bg-indigo-50 border border-indigo-200 text-indigo-700 px-4 py-2 rounded-lg text-xs flex items-center justify-between transition-all">
+            <span id="syncText" class="flex items-center gap-2"><i class="fa-solid fa-spinner fa-spin"></i> 正在同步數據至 Google Sheets...</span>
+        </div>
+
+        <!-- 日期選擇與集會狀態設定 -->
+        <section class="bg-white rounded-xl shadow-sm p-4 border border-slate-200 space-y-4">
+            <div class="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
+                <div>
+                    <div class="flex items-center gap-2 mb-1">
+                        <label class="block text-xs font-semibold text-slate-500 uppercase tracking-wider">點名日期</label>
+                        <span id="fridayBadge" class="hidden text-[10px] bg-emerald-100 text-emerald-700 font-bold px-2 py-0.5 rounded-full">
+                            <i class="fa-solid fa-calendar-check mr-1"></i>今日為集會日 (星期五)
+                        </span>
+                    </div>
+                    <div class="flex items-center gap-2 flex-wrap">
+                        <input type="date" id="meetingDate" class="border border-slate-300 rounded-lg px-3 py-1.5 text-sm font-medium focus:ring-2 focus:ring-indigo-500 outline-none">
+                        <button onclick="setTodayDate()" class="text-xs bg-slate-100 text-slate-700 hover:bg-slate-200 px-2.5 py-1.5 rounded-lg border border-slate-300 transition">設為今天</button>
+                        <button onclick="setNextFriday()" class="text-xs bg-indigo-50 text-indigo-600 hover:bg-indigo-100 px-2.5 py-1.5 rounded-lg border border-indigo-200 transition">切換至本週五</button>
+                        <button onclick="fetchCloudData()" class="text-xs bg-emerald-50 text-emerald-600 hover:bg-emerald-100 px-2.5 py-1.5 rounded-lg border border-emerald-200 transition">
+                            <i class="fa-solid fa-rotate mr-1"></i>刷新雲端數據
+                        </button>
+                    </div>
+                </div>
+
+                <!-- 統計數據 -->
+                <div id="statBox" class="flex gap-4 text-center w-full sm:w-auto justify-around bg-slate-50 p-2.5 rounded-lg border border-slate-100">
+                    <div>
+                        <div class="text-xs text-slate-500">總人數</div>
+                        <div id="statTotal" class="text-lg font-bold text-slate-700">0</div>
+                    </div>
+                    <div class="border-r border-slate-200"></div>
+                    <div>
+                        <div class="text-xs text-slate-500">出席</div>
+                        <div id="statPresent" class="text-lg font-bold text-emerald-600">0</div>
+                    </div>
+                    <div class="border-r border-slate-200"></div>
+                    <div>
+                        <div class="text-xs text-slate-500">出席率</div>
+                        <div id="statRate" class="text-lg font-bold text-indigo-600">0%</div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 特殊情況選單 -->
+            <div class="pt-3 border-t border-slate-100 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 bg-slate-50 p-3 rounded-lg">
+                <div class="flex items-center gap-2">
+                    <span class="text-xs font-bold text-slate-600"><i class="fa-solid fa-triangle-exclamation text-amber-500 mr-1"></i>當天集會狀態：</span>
+                    <select id="meetingStatus" onchange="updateMeetingStatus()" class="border border-slate-300 rounded-md text-xs px-2.5 py-1.5 bg-white font-medium outline-none">
+                        <option value="normal">✅ 正常舉行集會</option>
+                        <option value="cancelled">⛈️ 集會取消 (暴雨/颱風/假期)</option>
+                        <option value="special">⭐ 特別活動 / 外出</option>
+                    </select>
+                </div>
+                <div id="reasonInputContainer" class="hidden w-full sm:w-auto flex-1 max-w-md">
+                    <input type="text" id="cancelReason" onchange="syncAttendanceToCloud()" placeholder="請輸入取消/特殊原因" class="w-full border border-amber-300 bg-amber-50/50 rounded-md px-3 py-1 text-xs outline-none focus:ring-2 focus:ring-amber-500">
+                </div>
+            </div>
+        </section>
+
+        <!-- 工具欄 -->
+        <section class="flex flex-col sm:flex-row gap-3 justify-between items-center">
+            <div class="flex gap-2 w-full sm:w-auto">
+                <input type="text" id="newMemberName" placeholder="輸入單個姓名..." class="border border-slate-300 rounded-lg px-3 py-2 text-sm w-full sm:w-56 focus:ring-2 focus:ring-indigo-500 outline-none">
+                <button onclick="addSingleMember()" class="bg-indigo-600 hover:bg-indigo-700 text-white text-sm font-medium px-3.5 py-2 rounded-lg transition shrink-0">
+                    <i class="fa-solid fa-plus mr-1"></i> 新增
+                </button>
+                <button onclick="openBatchModal()" class="bg-amber-50 hover:bg-amber-100 text-amber-800 border border-amber-200 text-sm font-medium px-3.5 py-2 rounded-lg transition shrink-0">
+                    <i class="fa-solid fa-users-line mr-1"></i> 批量匯入
+                </button>
+            </div>
+            
+            <div class="flex gap-2 w-full sm:w-auto justify-end">
+                <button onclick="markAllPresent()" class="bg-emerald-50 hover:bg-emerald-100 text-emerald-700 border border-emerald-200 text-xs font-medium px-3 py-2 rounded-lg transition">
+                    <i class="fa-solid fa-check-double mr-1"></i> 全選出席
+                </button>
+                
+                <button onclick="exportExcel()" class="bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-medium px-3 py-2 rounded-lg shadow-sm transition flex items-center gap-1.5">
+                    <i class="fa-solid fa-file-excel text-sm"></i> 匯出 Excel
+                </button>
+            </div>
+        </section>
+
+        <!-- 點名列表卡片 -->
+        <section class="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden">
+            <div class="overflow-x-auto">
+                <table class="w-full text-left text-sm">
+                    <thead class="bg-slate-50 text-slate-500 font-semibold border-b border-slate-200">
+                        <tr>
+                            <th class="p-4">姓名</th>
+                            <th class="p-4 text-center">點名狀態</th>
+                            <th class="p-4 text-right">操作</th>
+                        </tr>
+                    </thead>
+                    <tbody id="memberList" class="divide-y divide-slate-100">
+                        <!-- 動態渲染成員 -->
+                    </tbody>
+                </table>
+            </div>
+        </section>
+
+    </main>
+
+    <!-- Modal -->
+    <div id="batchModal" class="hidden fixed inset-0 bg-slate-900/40 backdrop-blur-sm flex items-center justify-center p-4 z-50">
+        <div class="bg-white rounded-2xl shadow-xl max-w-lg w-full p-6 space-y-4">
+            <div class="flex justify-between items-center">
+                <h3 class="text-lg font-bold text-slate-800"><i class="fa-solid fa-user-plus text-indigo-600 mr-2"></i>批量新增成員名單</h3>
+                <button onclick="closeBatchModal()" class="text-slate-400 hover:text-slate-600 text-lg"><i class="fa-solid fa-xmark"></i></button>
+            </div>
+            <textarea id="batchInput" rows="6" placeholder="陳大文&#10;張小明&#10;李美儀" class="w-full border border-slate-300 rounded-lg p-3 text-sm focus:ring-2 focus:ring-indigo-500 outline-none font-mono"></textarea>
+            <div class="flex justify-end gap-2">
+                <button onclick="closeBatchModal()" class="px-4 py-2 text-sm text-slate-600 hover:bg-slate-100 rounded-lg">取消</button>
+                <button onclick="submitBatchMembers()" class="px-4 py-2 text-sm bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg font-medium">確認匯入</button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const GOOGLE_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbxq36W9sxvI7dPr_zGedXbF7NLVOikfw9ZAgBiJyiWCM-hxV_fSWBQNiqctCxpTWQoa/exec";
+
+        let members = [];
+        let attendanceData = {};
+
+        const statusMap = { present: '出席', late: '遲到', leave: '請假', absent: '缺席', cancelled: '取消' };
+
+        document.addEventListener('DOMContentLoaded', () => {
+            setTodayDate();
+            fetchCloudData();
+            document.getElementById('meetingDate').addEventListener('change', () => {
+                checkFridayBadge();
+                renderList();
+            });
+        });
+
+        // 1. 從 Google Sheets 抓取最新數據
+        function fetchCloudData() {
+            showSyncStatus("正在從 Google Sheets 載入最新數據...");
+            fetch(GOOGLE_SCRIPT_URL)
+                .then(res => res.json())
+                .then(data => {
+                    members = data.members || [];
+                    attendanceData = data.attendance || {};
+                    renderList();
+                    hideSyncStatus();
+                })
+                .catch(err => {
+                    console.error("雲端讀取失敗:", err);
+                    showSyncStatus("⚠️ 連線失敗，請確認網頁應用程式權限設為「所有人」", true);
+                });
+        }
+
+        // 2. 同步點名狀態至雲端 (使用 text/plain 避免跨域請求失敗)
+        function syncAttendanceToCloud() {
+            const date = document.getElementById('meetingDate').value;
+            if (!date) return;
+
+            const dayObj = attendanceData[date] || { status: 'normal', reason: '', records: {} };
+            showSyncStatus("正在寫入點名狀態至 Google Sheets...");
+
+            const payload = {
+                action: 'saveAttendance',
+                date: date,
+                meetingStatus: dayObj.status || 'normal',
+                reason: document.getElementById('cancelReason').value || '',
+                records: dayObj.records || {}
+            };
+
+            fetch(GOOGLE_SCRIPT_URL, {
+                method: 'POST',
+                headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+                body: JSON.stringify(payload)
+            })
+            .then(res => res.json())
+            .then(res => {
+                if(res.status === 'success') {
+                    showSyncStatus("✅ 點名狀態已成功寫入雲端！");
+                    setTimeout(hideSyncStatus, 1500);
+                }
+            })
+            .catch(err => {
+                console.error(err);
+                hideSyncStatus();
+            });
+        }
+
+        // 3. 同步成員名單至雲端
+        function syncMembersToCloud() {
+            showSyncStatus("正在更新成員名單至 Google Sheets...");
+            const payload = {
+                action: 'saveMembers',
+                members: members
+            };
+
+            fetch(GOOGLE_SCRIPT_URL, {
+                method: 'POST',
+                headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+                body: JSON.stringify(payload)
+            })
+            .then(res => res.json())
+            .then(res => {
+                if(res.status === 'success') {
+                    showSyncStatus("✅ 成員名單已成功同步！");
+                    setTimeout(hideSyncStatus, 1500);
+                }
+            })
+            .catch(err => {
+                console.error(err);
+                hideSyncStatus();
+            });
+        }
+
+        function showSyncStatus(msg, isError = false) {
+            const el = document.getElementById('syncStatus');
+            const text = document.getElementById('syncText');
+            text.innerHTML = isError ? msg : `<i class="fa-solid fa-spinner fa-spin"></i> ${msg}`;
+            el.className = isError ? 
+                "bg-rose-50 border border-rose-200 text-rose-700 px-4 py-2 rounded-lg text-xs flex items-center justify-between" : 
+                "bg-indigo-50 border border-indigo-200 text-indigo-700 px-4 py-2 rounded-lg text-xs flex items-center justify-between";
+            el.classList.remove('hidden');
+        }
+
+        function hideSyncStatus() {
+            document.getElementById('syncStatus').classList.add('hidden');
+        }
+
+        function setTodayDate() {
+            const today = new Date();
+            const year = today.getFullYear();
+            const month = String(today.getMonth() + 1).padStart(2, '0');
+            const day = String(today.getDate()).padStart(2, '0');
+            document.getElementById('meetingDate').value = `${year}-${month}-${day}`;
+            checkFridayBadge();
+            renderList();
+        }
+
+        function checkFridayBadge() {
+            const dateVal = document.getElementById('meetingDate').value;
+            const badge = document.getElementById('fridayBadge');
+            if (!dateVal) return;
+            const selectedDate = new Date(dateVal + 'T00:00:00');
+            if (selectedDate.getDay() === 5) badge.classList.remove('hidden');
+            else badge.classList.add('hidden');
+        }
+
+        function setNextFriday() {
+            const today = new Date();
+            const dayOfWeek = today.getDay(); 
+            const daysUntilFriday = (5 - dayOfWeek + 7) % 7;
+            const friday = new Date(today);
+            friday.setDate(today.getDate() + (daysUntilFriday === 0 && today.getDay() !== 5 ? 7 : daysUntilFriday));
+            
+            const year = friday.getFullYear();
+            const month = String(friday.getMonth() + 1).padStart(2, '0');
+            const day = String(friday.getDate()).padStart(2, '0');
+            
+            document.getElementById('meetingDate').value = `${year}-${month}-${day}`;
+            checkFridayBadge();
+            renderList();
+        }
+
+        function updateMeetingStatus() {
+            const date = document.getElementById('meetingDate').value;
+            if (!date) return;
+
+            if (!attendanceData[date]) {
+                attendanceData[date] = { status: 'normal', reason: '', records: {} };
+            }
+
+            const meetingStatus = document.getElementById('meetingStatus').value;
+            attendanceData[date].status = meetingStatus;
+
+            const container = document.getElementById('reasonInputContainer');
+            if (meetingStatus === 'cancelled' || meetingStatus === 'special') {
+                container.classList.remove('hidden');
+            } else {
+                container.classList.add('hidden');
+            }
+
+            renderList();
+            syncAttendanceToCloud();
+        }
+
+        function addSingleMember() {
+            const input = document.getElementById('newMemberName');
+            const name = input.value.trim();
+            if (!name) return;
+
+            members.push({ id: String(Date.now()), name });
+            input.value = '';
+            renderList();
+            syncMembersToCloud();
+        }
+
+        function openBatchModal() { document.getElementById('batchModal').classList.remove('hidden'); }
+        function closeBatchModal() { 
+            document.getElementById('batchModal').classList.add('hidden');
+            document.getElementById('batchInput').value = '';
+        }
+
+        function submitBatchMembers() {
+            const rawText = document.getElementById('batchInput').value;
+            if (!rawText.trim()) return;
+
+            const names = rawText.split(/[\n,;，；]/).map(n => n.trim()).filter(n => n.length > 0);
+            names.forEach((name, index) => {
+                members.push({ id: String(Date.now() + index), name });
+            });
+
+            closeBatchModal();
+            renderList();
+            syncMembersToCloud();
+        }
+
+        function deleteMember(id) {
+            if (confirm('確定要刪除此成員嗎？')) {
+                members = members.filter(m => String(m.id) !== String(id));
+                renderList();
+                syncMembersToCloud();
+            }
+        }
+
+        function setStatus(memberId, status) {
+            const date = document.getElementById('meetingDate').value;
+            if (!date) return;
+
+            if (!attendanceData[date]) {
+                attendanceData[date] = { status: 'normal', reason: '', records: {} };
+            }
+
+            attendanceData[date].records[String(memberId)] = status;
+            renderList();
+            syncAttendanceToCloud();
+        }
+
+        function markAllPresent() {
+            const date = document.getElementById('meetingDate').value;
+            if (!date) return;
+
+            if (!attendanceData[date]) {
+                attendanceData[date] = { status: 'normal', reason: '', records: {} };
+            }
+
+            members.forEach(m => {
+                attendanceData[date].records[String(m.id)] = 'present';
+            });
+
+            renderList();
+            syncAttendanceToCloud();
+        }
+
+        function renderList() {
+            const date = document.getElementById('meetingDate').value;
+            const listEl = document.getElementById('memberList');
+            listEl.innerHTML = '';
+
+            const dayObj = attendanceData[date] || { status: 'normal', reason: '', records: {} };
+            document.getElementById('meetingStatus').value = dayObj.status || 'normal';
+            
+            const reasonContainer = document.getElementById('reasonInputContainer');
+            document.getElementById('cancelReason').value = dayObj.reason || '';
+            if (dayObj.status === 'cancelled' || dayObj.status === 'special') reasonContainer.classList.remove('hidden');
+            else reasonContainer.classList.add('hidden');
+
+            let presentCount = 0;
+            const isCancelled = dayObj.status === 'cancelled';
+
+            members.forEach(member => {
+                const mId = String(member.id);
+                const status = isCancelled ? 'cancelled' : (dayObj.records[mId] || 'absent');
+                if (status === 'present' || status === 'late') presentCount++;
+
+                const tr = document.createElement('tr');
+                tr.className = 'hover:bg-slate-50 transition';
+                
+                let actionButtonsHTML = '';
+                if (isCancelled) {
+                    actionButtonsHTML = `<span class="px-3 py-1 bg-amber-100 text-amber-800 rounded-lg font-medium text-xs">⛈️ 集會已取消 (${dayObj.reason || '未列明原因'})</span>`;
+                } else {
+                    actionButtonsHTML = `
+                        <div class="inline-flex rounded-lg border border-slate-200 p-1 bg-slate-50 gap-1">
+                            <button onclick="setStatus('${mId}', 'present')" class="px-3 py-1 text-xs rounded-md font-medium transition ${status === 'present' ? 'bg-emerald-500 text-white shadow-sm' : 'text-slate-600 hover:bg-slate-200'}">出席</button>
+                            <button onclick="setStatus('${mId}', 'late')" class="px-3 py-1 text-xs rounded-md font-medium transition ${status === 'late' ? 'bg-amber-500 text-white shadow-sm' : 'text-slate-600 hover:bg-slate-200'}">遲到</button>
+                            <button onclick="setStatus('${mId}', 'leave')" class="px-3 py-1 text-xs rounded-md font-medium transition ${status === 'leave' ? 'bg-blue-500 text-white shadow-sm' : 'text-slate-600 hover:bg-slate-200'}">請假</button>
+                            <button onclick="setStatus('${mId}', 'absent')" class="px-3 py-1 text-xs rounded-md font-medium transition ${status === 'absent' ? 'bg-rose-500 text-white shadow-sm' : 'text-slate-600 hover:bg-slate-200'}">缺席</button>
+                        </div>
+                    `;
+                }
+
+                tr.innerHTML = `
+                    <td class="p-4 font-medium text-slate-800">${member.name}</td>
+                    <td class="p-4 text-center">${actionButtonsHTML}</td>
+                    <td class="p-4 text-right">
+                        <button onclick="deleteMember('${mId}')" class="text-slate-400 hover:text-rose-500 transition px-2 py-1">
+                            <i class="fa-regular fa-trash-can"></i>
+                        </button>
+                    </td>
+                `;
+                listEl.appendChild(tr);
+            });
+
+            document.getElementById('statTotal').innerText = members.length;
+            if (isCancelled) {
+                document.getElementById('statPresent').innerText = '-';
+                document.getElementById('statRate').innerText = '取消';
+            } else {
+                document.getElementById('statPresent').innerText = presentCount;
+                const rate = members.length > 0 ? Math.round((presentCount / members.length) * 100) : 0;
+                document.getElementById('statRate').innerText = `${rate}%`;
+            }
+        }
+
+        function exportExcel() {
+            const currentDate = document.getElementById('meetingDate').value;
+            const wb = XLSX.utils.book_new();
+
+            const dayObj = attendanceData[currentDate] || { status: 'normal', reason: '', records: {} };
+            let statusNote = "正常集會";
+            if (dayObj.status === 'cancelled') statusNote = `集會取消 (${dayObj.reason || '無備註'})`;
+            if (dayObj.status === 'special') statusNote = `特別活動 (${dayObj.reason || '無備註'})`;
+
+            const singleDayData = [
+                ["集會日期", currentDate],
+                ["集會狀態", statusNote],
+                [],
+                ["姓名", "出席狀態"]
+            ];
+
+            members.forEach(m => {
+                const status = dayObj.status === 'cancelled' ? '集會取消' : statusMap[dayObj.records[String(m.id)] || 'absent'];
+                singleDayData.push([m.name, status]);
+            });
+
+            const wsSingle = XLSX.utils.aoa_to_sheet(singleDayData);
+            XLSX.utils.book_append_sheet(wb, wsSingle, `${currentDate} 點名`);
+
+            XLSX.writeFile(wb, `學會點名紀錄_${currentDate}.xlsx`);
+        }
+    </script>
+</body>
+</html>
